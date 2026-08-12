@@ -1,0 +1,1253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wheel of the Year — Sun, Moon &amp; Seasons</title>
+<style>
+  :root{
+    --hud-fg: #f3f6ff;
+    --hud-dim: rgba(243,246,255,.62);
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background:#05070f;
+    overflow:hidden;
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  #scene{
+    display:block;
+    width:100%;
+    height:100%;
+    touch-action:none;
+    cursor:grab;
+    outline:none;
+  }
+  #scene.grabbing{ cursor:grabbing; }
+
+  #hud{
+    position:fixed;
+    top: max(18px, env(safe-area-inset-top));
+    right: max(18px, env(safe-area-inset-right));
+    z-index:5;
+    padding:12px 16px 13px;
+    min-width:148px;
+    border-radius:14px;
+    background:rgba(10,14,26,.34);
+    border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(14px) saturate(1.2);
+    -webkit-backdrop-filter:blur(14px) saturate(1.2);
+    color:var(--hud-fg);
+    text-align:right;
+    user-select:none;
+    pointer-events:none;
+    box-shadow:0 8px 30px rgba(0,0,0,.28);
+  }
+  #hud .label{
+    font-size:10px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--hud-dim);
+  }
+  #hud .count{
+    font-size:38px;
+    line-height:1.02;
+    font-weight:250;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;
+    margin:1px 0 7px;
+  }
+  #hud .count.tick{ animation:tick .45s cubic-bezier(.2,.9,.3,1); }
+  @keyframes tick{
+    0%  { transform:translateY(-7px); opacity:.35; }
+    100%{ transform:translateY(0);    opacity:1; }
+  }
+  #hud .track{
+    height:3px;
+    border-radius:3px;
+    background:rgba(255,255,255,.16);
+    overflow:hidden;
+    margin-bottom:8px;
+  }
+  #hud .fill{
+    height:100%;
+    width:0%;
+    border-radius:3px;
+    background:linear-gradient(90deg, #ffd27a, #ffe9c2);
+    transition:background .5s linear;
+  }
+  #hud .season{
+    font-size:12px;
+    letter-spacing:.05em;
+    color:rgba(243,246,255,.86);
+  }
+  #hud .season b{ font-weight:600; }
+  #hud .season span{ color:var(--hud-dim); }
+
+  #hint{
+    position:fixed;
+    left:50%;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    z-index:5;
+    padding:8px 15px;
+    border-radius:999px;
+    background:rgba(10,14,26,.3);
+    border:1px solid rgba(255,255,255,.12);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    color:rgba(243,246,255,.8);
+    font-size:12.5px;
+    letter-spacing:.03em;
+    white-space:nowrap;
+    user-select:none;
+    pointer-events:none;
+    transition:opacity .7s ease;
+  }
+  #hint.gone{ opacity:0; }
+  @media (max-width:420px){
+    #hud{ min-width:124px; padding:10px 13px 11px; }
+    #hud .count{ font-size:31px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene" tabindex="0" role="slider" aria-label="Drag the sun and moon forward around the tree to move through the day and the seasons. The wheel only turns one way." aria-valuemin="0" aria-valuemax="360" aria-valuenow="0"></canvas>
+
+<div id="hud">
+  <div class="label">Cycles</div>
+  <div class="count" id="count" aria-live="polite">0</div>
+  <div class="track"><div class="fill" id="fill"></div></div>
+  <div class="season"><b id="season">Summer</b> <span id="phase">· Noon</span></div>
+</div>
+
+<div id="hint">Drag the sun around the tree &nbsp;·&nbsp; it only turns forward</div>
+
+<script>
+(() => {
+"use strict";
+
+const TAU = Math.PI * 2;
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d', { alpha:false });
+const elCount  = document.getElementById('count');
+const elFill   = document.getElementById('fill');
+const elSeason = document.getElementById('season');
+const elPhase  = document.getElementById('phase');
+const elHint   = document.getElementById('hint');
+
+/* ---------------------------------------------------------------- utils */
+const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
+const lerp  = (a,b,t) => a + (b-a)*t;
+function smoothstep(e0, e1, x){
+  const t = clamp((x-e0)/(e1-e0), 0, 1);
+  return t*t*(3-2*t);
+}
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+// shortest signed difference between two angles
+function angDiff(d){
+  while (d >  Math.PI) d -= TAU;
+  while (d < -Math.PI) d += TAU;
+  return d;
+}
+// colours are [r,g,b] arrays
+const mix = (a,b,t) => [ a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t ];
+const css = (c,a) => a === undefined
+  ? `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`
+  : `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+// interpolate around a closed ring of evenly spaced colour keys
+function ringLerp(keys, s){
+  const n = keys.length;
+  const p = (((s % 1) + 1) % 1) * n;
+  const i = Math.floor(p);
+  const f = p - i;
+  return mix(keys[i % n], keys[(i+1) % n], f*f*(3-2*f));
+}
+
+/* ------------------------------------------------------------- palettes */
+// eight keys around the wheel: noon(summer) → dusk(autumn) → midnight(winter) → dawn(spring)
+const SKY_TOP = [
+  [ 38,110,190],[ 54,124,196],[ 40, 60,120],[ 12, 20, 48],
+  [  4,  6, 16],[  8, 14, 38],[ 46, 78,148],[ 58,134,206]
+];
+const SKY_MID = [
+  [ 96,172,225],[124,186,226],[214,106, 78],[ 26, 38, 76],
+  [  9, 14, 32],[ 22, 32, 66],[226,134,116],[138,196,238]
+];
+const SKY_BOT = [
+  [186,224,244],[214,231,214],[246,182, 96],[ 58, 60, 92],
+  [ 20, 28, 52],[ 48, 54, 92],[250,208,150],[212,234,206]
+];
+const GROUND_KEYS = [ [74,142,62], [138,106,52], [92,104,124], [104,168,74] ];
+
+const LEAF_SUMMER = [ [46,122,58],[62,146,66],[38,104,50],[74,160,72],[52,132,60] ];
+const LEAF_AUTUMN = [ [224,163,58],[217,119,47],[192,74,42],[184,52,42],[230,192,74] ];
+const LEAF_SPRING = [ [168,208,106],[191,224,127],[214,235,150],[150,198,96] ];
+const BLOSSOM     = [243,185,204];
+
+const NIGHT_TINT  = [10,16,34];
+const WARM_TINT   = [255,146,84];
+
+const SEASONS = ['Summer','Autumn','Winter','Spring'];
+const PHASES  = ['Noon','Afternoon','Dusk','Night','Midnight','Late night','Dawn','Morning'];
+
+/* --------------------------------------------------------------- layout */
+let W = 0, H = 0, dpr = 1;
+let cx = 0, cy = 0, R = 0;          // wheel centre + radius
+let groundY = 0;
+let tree = null, stars = [], clouds = [], grass = [], hills = [];
+let flakes = [];
+const falling = [];                  // leaves in the air
+const litter  = [];                  // leaves on the ground
+const streaks = [];                  // meteors currently in the sky
+let nextShoot = 2.5;
+
+const SEED = 20260806;
+
+/* ------------------------------------------------------------ the tree */
+// The tree is grown once in abstract units, then scaled into the viewport so
+// the wheel encircles its crown.
+let treeUnits = null;
+
+function buildTreeUnits(){
+  const rand = mulberry32(SEED);
+  const branches = [], tips = [];
+
+  (function grow(x, y, ang, len, w, depth){
+    const x2 = x + Math.cos(ang)*len;
+    const y2 = y + Math.sin(ang)*len;
+    const w2 = w * 0.74;
+    branches.push({ x1:x, y1:y, x2, y2, w1:w, w2, depth });
+
+    if (depth >= 6 || len < 2.6){ tips.push({ x:x2, y:y2, depth }); return; }
+
+    const kids = depth === 0 ? 3 : (rand() < 0.28 ? 3 : 2);
+    for (let i = 0; i < kids; i++){
+      const t = kids === 1 ? 0 : (i/(kids-1)) - 0.5;      // -0.5 .. 0.5
+      let na = ang + t*(0.92 + rand()*0.44) + (rand()-0.5)*0.30;
+      na += (-Math.PI/2 - na) * 0.21;                     // keep the crown upright
+      const nl = len * (0.74 + rand()*0.10);
+      grow(x2, y2, na, nl, w2*(0.88 + rand()*0.09), depth+1);
+      if (depth >= 3) tips.push({ x:lerp(x,x2,0.55), y:lerp(y,y2,0.55), depth });
+    }
+  })(0, 0, -Math.PI/2, 34, 4.8, 0);
+
+  // full bounding box (base sits at y = 0)
+  let minX = 1e9, maxX = -1e9, minY = 1e9;
+  // crown = everything above the bare trunk
+  let cMinX = 1e9, cMaxX = -1e9, cMinY = 1e9, cMaxY = -1e9;
+  for (const b of branches){
+    minX = Math.min(minX, b.x1, b.x2); maxX = Math.max(maxX, b.x1, b.x2);
+    minY = Math.min(minY, b.y1, b.y2);
+    if (b.depth >= 1){
+      cMinX = Math.min(cMinX, b.x1, b.x2); cMaxX = Math.max(cMaxX, b.x1, b.x2);
+      cMinY = Math.min(cMinY, b.y1, b.y2); cMaxY = Math.max(cMaxY, b.y1, b.y2);
+    }
+  }
+  const crownCx = (cMinX + cMaxX)/2;
+  const crownCy = (cMinY + cMaxY)/2;
+  const crownH  = cMaxY - cMinY;
+  const halfW   = Math.max(cMaxX - crownCx, crownCx - cMinX);
+  const Runits  = Math.max(halfW, crownH/2) * 1.10;
+
+  // leaf anchors, also in unit space
+  const seeds = [];
+  for (const tip of tips){
+    const n = tip.depth >= 6 ? 4 : 2;
+    for (let i = 0; i < n; i++){
+      const a = rand()*TAU, d = rand() * crownH * 0.06;
+      const lx = tip.x + Math.cos(a)*d, ly = tip.y + Math.sin(a)*d;
+      const high = clamp((-ly + cMaxY) / Math.max(1, crownH), 0, 1);   // 1 = crown top
+      const out  = clamp(Math.abs(lx - crownCx) / Math.max(1, halfW), 0, 1);
+      seeds.push({
+        x: lx, y: ly,
+        r: 0.020 + rand()*0.013,                                       // × crown height
+        ang: rand()*TAU,
+        thr: clamp(rand()*0.70 + out*0.17 + high*0.11, 0.02, 0.985),
+        hue: rand(),
+        blossom: rand() < 0.13
+      });
+    }
+  }
+
+  return {
+    branches, seeds,
+    fullW: maxX - minX, fullH: -minY,
+    crownCx, crownH, Runits,
+    offUnits: -crownCy            // crown centre height above the base
+  };
+}
+
+// scale + place the tree, and derive the wheel from it
+function fitTree(){
+  const u = treeUnits;
+  const Rmax = Math.min(W*0.43, H*0.325);
+  let scale = Math.min(Rmax / u.Runits, (W*0.94) / u.fullW, (H*0.80) / u.fullH);
+
+  // the whole composition has to fit between the top of the sky and the ground
+  let blockH = Math.max(u.offUnits*scale + u.Runits*scale, u.fullH*scale);
+  const topPad = H*0.055, maxGround = H*0.87;
+  if (topPad + blockH > maxGround){
+    const k = (maxGround - topPad) / blockH;
+    scale *= k;
+    blockH *= k;
+  }
+
+  R  = u.Runits * scale;
+  cx = W/2;
+  groundY = clamp(topPad + blockH, H*0.58, maxGround);
+  cy = groundY - u.offUnits*scale;
+
+  // The wheel stays centred on the crown so it hugs the tree with no dead space
+  // at the top. The cost is that its lowest point sits at or just under the
+  // horizon, so the moon rides low through midnight.
+
+  const ox = cx - u.crownCx*scale;
+  const ch = u.crownH * scale;
+  const branches = u.branches.map(b => ({
+    x1: b.x1*scale + ox,
+    // flare the trunk out where it meets the earth so it reads as planted
+    y1: b.y1*scale + groundY + (b.depth === 0 ? ch*0.022 : 0),
+    x2: b.x2*scale + ox, y2: b.y2*scale + groundY,
+    w1: Math.max(0.8, b.w1*scale) * (b.depth === 0 ? 1.55 : 1),
+    w2: Math.max(0.6, b.w2*scale),
+    depth: b.depth
+  }));
+  const trunk = branches[0];
+  const leaves = u.seeds.map(s => ({
+    x: s.x*scale + ox, y: s.y*scale + groundY,
+    size: ch * s.r,
+    ang: s.ang, thr: s.thr, hue: s.hue, blossom: s.blossom,
+    on: true, grow: 1
+  }));
+
+  // Precompute where snow piles up. Each qualifying limb gets a ridge polygon:
+  // a bottom edge that rests on the branch and a crest whose height rises and
+  // falls along the span, so it reads as heaped snow rather than a smooth tube.
+  // Snow falls straight down, so the pile is offset in world-up, not along the
+  // branch normal. Seeded, so the heaps are identical every frame and only
+  // their size tracks the season.
+  const srand = mulberry32(SEED + 31);
+  const snowPiles = [], snowClumps = [];
+  const meltAt = (x, y) => clamp(0.40 + 0.32*Math.sin(x*0.019)*Math.cos(y*0.026)
+                                 + srand()*0.22, 0.02, 0.97);
+
+  for (const b of branches){
+    const dx = b.x2 - b.x1, dy = b.y2 - b.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const flat = Math.abs(dx) / len;             // flat limbs catch the most
+    const hold = flat * flat;
+    if (hold < 0.06 || b.w1 < 1.0) continue;
+
+    const n     = Math.round(clamp(len / (ch*0.020), 3, 16));
+    const freq  = 1.1 + srand()*2.1;             // how many mounds along the span
+    const phase = srand()*TAU;
+    const pts = [];
+    for (let i = 0; i <= n; i++){
+      const u  = i/n;
+      const hw = lerp(b.w1, b.w2, u) * 0.5;
+      const taper = Math.pow(Math.sin(Math.PI*u), 0.45);   // slides off the ends
+      const wave  = 0.5 + 0.5*Math.sin(u*freq*TAU + phase);
+      const h = (hw*1.7 + ch*0.015) * hold * taper
+              * (0.40 + 0.80*wave) * (0.78 + srand()*0.46);
+      pts.push({ x: b.x1 + dx*u, y: b.y1 + dy*u, hw, h });
+    }
+    // always run left to right, so every ridge winds the same way and they
+    // union cleanly when filled together
+    if (pts[0].x > pts[pts.length-1].x) pts.reverse();
+    const mid = pts[(pts.length/2)|0];
+    snowPiles.push({ pts, melt: meltAt(mid.x, mid.y) });
+
+    // forks collect the deepest snow
+    if (b.depth >= 1 && b.w1 > 1.5){
+      const r = (b.w1*0.80 + ch*0.008) * (0.35 + 0.65*hold) * (0.8 + srand()*0.5);
+      snowClumps.push({
+        x: b.x1, y: b.y1 - b.w1*0.30 - r*0.20, r,
+        melt: meltAt(b.x1, b.y1)
+      });
+    }
+  }
+  tree = { branches, leaves, crownH: ch, baseX: trunk.x1, baseW: trunk.w1,
+           snowPiles, snowClumps };
+}
+
+/* --------------------------------------------------- scenery generators */
+function buildScenery(){
+  const rand = mulberry32(SEED + 7);
+
+  stars = [];
+  for (let i = 0; i < 340; i++){
+    stars.push({
+      x   : rand()*W,
+      y   : rand()*groundY,
+      size: 0.5 + rand()*rand()*2.1,
+      tw  : 0.7 + rand()*2.6,
+      ph  : rand()*TAU,
+      warm: rand() < 0.22
+    });
+  }
+
+  clouds = [];
+  for (let i = 0; i < 9; i++){
+    const puffs = [];
+    const n = 3 + Math.floor(rand()*4);
+    for (let j = 0; j < n; j++){
+      puffs.push({ dx:(j - (n-1)/2)*0.62 + (rand()-0.5)*0.3, dy:(rand()-0.5)*0.34, r:0.55 + rand()*0.5 });
+    }
+    clouds.push({
+      x: rand()*W*1.4 - W*0.2,
+      y: H*(0.06 + rand()*0.36),
+      s: H*(0.030 + rand()*0.045),
+      v: (7 + rand()*15) * (rand() < 0.5 ? -1 : 1),
+      puffs
+    });
+  }
+
+  grass = [];
+  const gh = H - groundY;
+  for (let i = 0; i < 190; i++){
+    const yy = groundY + Math.pow(rand(), 0.7) * gh;
+    grass.push({
+      x: rand()*W, y: yy,
+      h: (6 + rand()*13) * (0.5 + (yy-groundY)/Math.max(1,gh)),
+      lean: (rand()-0.5)*0.7,
+      tone: rand()
+    });
+  }
+
+  hills = [];
+  for (let k = 0; k < 2; k++){
+    const pts = [];
+    const amp = H*0.024 * (1 - k*0.4);
+    const ph  = rand()*TAU, fr = 1.4 + rand()*1.1;
+    for (let i = 0; i <= 40; i++){
+      const t = i/40;
+      pts.push({ x: t*W, y: groundY - amp*(0.55 + 0.45*Math.sin(t*fr*TAU + ph)) - k*H*0.012 });
+    }
+    hills.push(pts);
+  }
+
+  flakes = [];
+  for (let i = 0; i < 150; i++){
+    flakes.push({ x: rand()*W, y: rand()*H, r: 0.9 + rand()*2.1, v: 14 + rand()*38, sw: rand()*TAU, ss: 0.6 + rand()*1.4 });
+  }
+}
+
+function layout(){
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  if (!treeUnits) treeUnits = buildTreeUnits();
+  fitTree();                 // sets cx, cy, R, groundY and the placed tree
+  buildScenery();
+  falling.length = 0;
+  litter.length  = 0;
+}
+
+/* ---------------------------------------------------------- wheel state */
+let angle = 0;               // unwrapped: 0 = top = summer noon, grows clockwise
+let vel   = 0;               // angular velocity for flick momentum
+let idle  = 0;               // seconds since the wheel was last touched
+const AUTO_SPEED = TAU / 72; // one full year every 72 seconds, hands off
+let dragging = false;
+let lastPointerAng = 0;
+let interacted = false;
+const samples = [];
+
+function pointerAngle(e){
+  const r = canvas.getBoundingClientRect();
+  const dx = e.clientX - r.left - cx;
+  const dy = e.clientY - r.top  - cy;
+  return Math.atan2(dx, -dy);          // 0 at top, increasing clockwise
+}
+// Close to the hub the angle is ill-defined and flips around wildly. Since only
+// forward motion counts, that jitter would otherwise ratchet the year onward.
+function nearHub(e){
+  const r = canvas.getBoundingClientRect();
+  const dx = e.clientX - r.left - cx;
+  const dy = e.clientY - r.top  - cy;
+  return (dx*dx + dy*dy) < (R*0.18)*(R*0.18);
+}
+function orbXY(th){
+  return { x: cx + Math.sin(th)*R, y: cy - Math.cos(th)*R };
+}
+
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; vel = 0; samples.length = 0;
+  lastPointerAng = pointerAngle(e);
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('grabbing');
+  markInteracted();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const pa = pointerAngle(e);
+  if (nearHub(e)){ lastPointerAng = pa; return; }   // resync, don't accumulate
+  const d  = angDiff(pa - lastPointerAng);
+  lastPointerAng = pa;
+  if (d > 0) angle += d;              // the wheel only ever turns forward
+  const now = performance.now();
+  samples.push({ t: now, d: Math.max(0, d) });
+  while (samples.length && now - samples[0].t > 110) samples.shift();
+});
+function endDrag(e){
+  if (!dragging) return;
+  dragging = false;
+  canvas.classList.remove('grabbing');
+  if (e && e.pointerId !== undefined && canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  // flick momentum
+  if (samples.length > 1){
+    const dt = (samples[samples.length-1].t - samples[0].t) / 1000;
+    let sum = 0; for (const s of samples) sum += s.d;
+    if (dt > 0.008) vel = clamp(sum / dt, 0, 9);
+  }
+  samples.length = 0;
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('lostpointercapture', endDrag);
+
+canvas.addEventListener('keydown', e => {
+  const step = e.shiftKey ? 0.28 : 0.075;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp' ||
+      e.key === 'ArrowLeft'  || e.key === 'ArrowDown'){
+    angle += step; vel = 0; markInteracted(); e.preventDefault();
+  }
+});
+function markInteracted(){
+  if (interacted) return;
+  interacted = true;
+  elHint.classList.add('gone');
+}
+window.addEventListener('resize', layout);
+
+/* ------------------------------------------------------ season shaping */
+// foliage: 1 = full crown, 0 = bare. s is the season phase 0..1 around the wheel
+function foliage(s){
+  if (s < 0.10) return 1;
+  if (s < 0.45) return 1 - smoothstep(0.10, 0.45, s);
+  if (s < 0.66) return 0;
+  if (s < 0.95) return smoothstep(0.66, 0.95, s);
+  return 1;
+}
+function leafColor(leaf, s){
+  if (leaf.blossom && s > 0.62 && s < 0.94){
+    return mix(BLOSSOM, LEAF_SPRING[leaf.hue*LEAF_SPRING.length|0], smoothstep(0.80, 0.94, s));
+  }
+  const summer = LEAF_SUMMER[(leaf.hue*LEAF_SUMMER.length)|0];
+  if (s < 0.55){
+    const autumn = LEAF_AUTUMN[(leaf.hue*LEAF_AUTUMN.length)|0];
+    return mix(summer, autumn, smoothstep(0.06, 0.33, s));
+  }
+  const spring = LEAF_SPRING[(leaf.hue*LEAF_SPRING.length)|0];
+  return mix(spring, summer, smoothstep(0.74, 0.99, s));
+}
+
+/* ---------------------------------------------------------- draw pieces */
+let sunUp = 1, nightF = 0, duskF = 0, snowF = 0, season = 0;
+let snowTop = 0;          // y of the snowfield surface
+
+// tint any surface colour by the current light
+function shade(c){
+  let out = mix(c, WARM_TINT, duskF * 0.30);
+  out = mix(out, NIGHT_TINT, (1 - sunUp) * 0.80);
+  return out;
+}
+// snow catches the moonlight, so it darkens far less than everything else
+function shadeSnow(c){
+  let out = mix(c, WARM_TINT, duskF * 0.34);
+  out = mix(out, [96,116,164], (1 - sunUp) * 0.46);
+  return out;
+}
+
+function leafPath(g, s){
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.quadraticCurveTo(s*0.58, -s*0.52, s*1.55, 0);
+  g.quadraticCurveTo(s*0.58,  s*0.52, 0, 0);
+  g.closePath();
+}
+
+let skyMidNow = [120,180,225];
+
+function drawSky(s){
+  const top = ringLerp(SKY_TOP, s), mid = ringLerp(SKY_MID, s), bot = ringLerp(SKY_BOT, s);
+  skyMidNow = mid;
+  const g = ctx.createLinearGradient(0, 0, 0, groundY);
+  g.addColorStop(0,    css(top));
+  g.addColorStop(0.55, css(mid));
+  g.addColorStop(1,    css(bot));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawStars(t){
+  const a = clamp(1 - sunUp * 2.4, 0, 1);   // gone well before the sky brightens
+  if (a <= 0.01) return;
+  ctx.save();
+  for (const st of stars){
+    const x = st.x, y = st.y;
+    const tw = 0.55 + 0.45*Math.sin(t*st.tw + st.ph);
+    ctx.globalAlpha = a * tw;
+    ctx.fillStyle = st.warm ? '#ffe9c9' : '#eaf1ff';
+    ctx.beginPath();
+    ctx.arc(x, y, st.size, 0, TAU);
+    ctx.fill();
+    if (st.size > 1.7){
+      ctx.globalAlpha = a * tw * 0.14;
+      ctx.beginPath(); ctx.arc(x, y, st.size*2.6, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// Night sky visitors. Mostly lone white shooting stars; now and then a small
+// orange meteor shower — a handful of streaks travelling the same way, staggered
+// so they arrive in ones and twos rather than all at once.
+function spawnMeteor(o){
+  streaks.push({
+    x: o.x, y: o.y, ux: o.ux, uy: o.uy,
+    speed: o.speed, tail: o.tail, w: o.w, warm: o.warm,
+    life: 0, max: o.max, delay: o.delay || 0
+  });
+}
+
+function spawnShootingStar(){
+  const r = Math.random;
+  const dir = r() < 0.5 ? 1 : -1;
+  const th  = 0.42 + r()*0.40;                    // angle below the horizontal
+  spawnMeteor({
+    x: dir > 0 ? r()*W*0.55 : W - r()*W*0.55,
+    y: r()*groundY*0.42,
+    ux: dir*Math.cos(th), uy: Math.sin(th),
+    speed: 430 + r()*280, tail: 74 + r()*78,
+    w: 1.5 + r()*0.8, warm: false, max: 0.72 + r()*0.34
+  });
+}
+
+function spawnShower(){
+  const r = Math.random;
+  const dir = r() < 0.5 ? 1 : -1;
+  const th  = 0.52 + r()*0.26;                    // one shared direction
+  const n   = 5 + Math.floor(r()*4);              // kept small on purpose
+  for (let i = 0; i < n; i++){
+    const f  = (i + r()*0.7) / n;
+    const tj = th + (r()-0.5)*0.09;               // barely-there fan
+    spawnMeteor({
+      // enter just above the skyline so they are already bright by the time
+      // they are in frame, rather than burning out on the way down
+      x: W * (dir > 0 ? 0.02 + 0.80*f : 0.18 + 0.80*f),
+      y: -22 - r()*38,
+      ux: dir*Math.cos(tj), uy: Math.sin(tj),
+      speed: 380 + r()*190, tail: 86 + r()*80,
+      w: 1.2 + r()*0.9, warm: true,
+      max: 1.45 + r()*0.5,
+      delay: i*0.14 + r()*0.20
+    });
+  }
+}
+
+function drawMeteors(dt, t){
+  const night = clamp(1 - sunUp*3, 0, 1);
+
+  if (night > 0.55){
+    nextShoot -= dt;
+    if (nextShoot <= 0){
+      if (Math.random() < 0.2){ spawnShower();      nextShoot = 9 + Math.random()*8; }
+      else                    { spawnShootingStar(); nextShoot = 2.2 + Math.random()*3.4; }
+    }
+  }
+  if (!streaks.length) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (let i = streaks.length - 1; i >= 0; i--){
+    const m = streaks[i];
+    if (m.delay > 0){ m.delay -= dt; continue; }
+    m.life += dt;
+    if (m.life > m.max){ streaks.splice(i, 1); continue; }
+    m.x += m.ux * m.speed * dt;
+    m.y += m.uy * m.speed * dt;
+
+    const p = m.life / m.max;
+    const a = night * smoothstep(0, 0.09, p) * (1 - smoothstep(0.58, 1, p));
+    if (a <= 0.015) continue;
+
+    const tx = m.x - m.ux*m.tail, ty = m.y - m.uy*m.tail;
+    const g = ctx.createLinearGradient(m.x, m.y, tx, ty);
+    if (m.warm){
+      g.addColorStop(0,    `rgba(255,240,210,${a})`);
+      g.addColorStop(0.26, `rgba(255,166,74,${a*0.72})`);
+      g.addColorStop(1,     'rgba(255,116,26,0)');
+    } else {
+      g.addColorStop(0,    `rgba(255,255,255,${a})`);
+      g.addColorStop(1,     'rgba(198,218,255,0)');
+    }
+    ctx.strokeStyle = g;
+    ctx.lineWidth = m.w;
+    ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(tx, ty); ctx.stroke();
+
+    ctx.globalAlpha = a;
+    ctx.fillStyle = m.warm ? '#fff1d6' : '#ffffff';
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.w*0.6, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function drawClouds(dt, s){
+  const alpha = 0.02 + sunUp*0.72;      // the night sky stays clear
+  // pull the cloud colour toward the sky behind it so they sit in the palette
+  const base = mix([255,255,255], skyMidNow, 0.22 + duskF*0.30);
+  const col  = shade(base);
+  const warm = mix(col, [255,186,140], duskF*0.60);
+  ctx.save();
+  for (const c of clouds){
+    c.x += c.v * dt;
+    if (c.x < -W*0.35) c.x = W*1.3;
+    if (c.x > W*1.35)  c.x = -W*0.3;
+    ctx.globalAlpha = alpha * (0.72 + 0.28*Math.sin(c.y));
+    ctx.fillStyle = css(warm);
+    // one path: overlapping puffs plus a soft flat underside, filled once so no seams show
+    ctx.beginPath();
+    let lo = 0, hi = 0;
+    for (const p of c.puffs){
+      const px = c.x + p.dx*c.s*1.9, py = c.y + p.dy*c.s, pr = p.r*c.s;
+      lo = Math.min(lo, px - pr - c.x);
+      hi = Math.max(hi, px + pr - c.x);
+      ctx.moveTo(px + pr, py);
+      ctx.arc(px, py, pr, 0, TAU);
+    }
+    const bw = (hi - lo) * 0.5, bx = c.x + (hi + lo) * 0.5;
+    ctx.moveTo(bx + bw, c.y + c.s*0.18);
+    ctx.ellipse(bx, c.y + c.s*0.18, bw, c.s*0.42, 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawTrack(th){
+  ctx.save();
+  ctx.setLineDash([2, 9]);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = `rgba(255,255,255,${0.26 + (dragging?0.20:0) + sunUp*0.10})`;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  // season ticks
+  for (let i = 0; i < 4; i++){
+    const a = i * Math.PI/2;
+    const x = cx + Math.sin(a)*R, y = cy - Math.cos(a)*R;
+    ctx.globalAlpha = 0.20 + (dragging ? 0.18 : 0);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(x, y, 1.9, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawOrb(t, th, ox, oy){
+  // stay a sun right down to the horizon, then hand over to the moon below it
+  const moonAmt = smoothstep(0.04, -0.30, Math.cos(th));       // 0 = sun, 1 = moon
+  const swell   = 1 + duskF * 0.42;
+  const base    = Math.min(W, H) * 0.042;
+  const r       = base * lerp(1, 0.90, moonAmt) * swell;
+
+  // glow
+  const glowCol = mix([255,196,86], [188,206,246], moonAmt);
+  const glowR   = r * lerp(6.2, 4.4, moonAmt);
+  const gg = ctx.createRadialGradient(ox, oy, r*0.4, ox, oy, glowR);
+  gg.addColorStop(0,    css(glowCol, lerp(0.55, 0.50, moonAmt)));
+  gg.addColorStop(0.35, css(glowCol, lerp(0.16, 0.10, moonAmt)));
+  gg.addColorStop(1,    css(glowCol, 0));
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(ox, oy, glowR, 0, TAU); ctx.fill();
+  ctx.restore();
+
+  // rays (sun only)
+  if (moonAmt < 0.95){
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.rotate(t*0.06);
+    ctx.globalCompositeOperation = 'lighter';
+    // rays belong to a high sun; they soften as it nears the horizon
+    ctx.globalAlpha = (1-moonAmt) * (1 - duskF*0.72) * 0.15 * (0.75 + 0.25*Math.sin(t*1.3));
+    ctx.fillStyle = '#ffe6a8';
+    for (let i = 0; i < 12; i++){
+      ctx.rotate(TAU/12);
+      ctx.beginPath();
+      ctx.moveTo(-r*0.13, -r*1.2);
+      ctx.lineTo( r*0.13, -r*1.2);
+      ctx.lineTo(0, -r*2.15);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // disc — sun body under, moon body cross-fading over
+  const sunInner = mix([255,252,226], [255,214,120], duskF*0.55);
+  const sunOuter = mix([255,196,72],  [246,118, 62], duskF*0.75);
+  ctx.save();
+  ctx.globalAlpha = 1 - moonAmt*0.9;
+  const sg = ctx.createRadialGradient(ox - r*0.22, oy - r*0.25, r*0.1, ox, oy, r);
+  sg.addColorStop(0, css(sunInner));
+  sg.addColorStop(1, css(sunOuter));
+  ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.arc(ox, oy, r, 0, TAU); ctx.fill();
+  ctx.restore();
+
+  if (moonAmt > 0.02){
+    ctx.save();
+    ctx.globalAlpha = moonAmt;
+    const mg = ctx.createRadialGradient(ox - r*0.28, oy - r*0.3, r*0.12, ox, oy, r);
+    mg.addColorStop(0, '#fdfefe');
+    mg.addColorStop(0.7, '#e4e9f3');
+    mg.addColorStop(1, '#c2cbdd');
+    ctx.fillStyle = mg;
+    ctx.beginPath(); ctx.arc(ox, oy, r, 0, TAU); ctx.fill();
+
+    // craters
+    ctx.clip();
+    const cr = mulberry32(99);
+    ctx.globalAlpha = moonAmt * 0.20;
+    ctx.fillStyle = '#8e99b0';
+    for (let i = 0; i < 8; i++){
+      const a = cr()*TAU, d = Math.sqrt(cr())*r*0.72;
+      ctx.beginPath();
+      ctx.arc(ox + Math.cos(a)*d, oy + Math.sin(a)*d, r*(0.07 + cr()*0.15), 0, TAU);
+      ctx.fill();
+    }
+    // gentle terminator so it reads as a phase
+    const ph = ((cycles * 0.22) % 1) * TAU;
+    const off = Math.cos(ph) * r * 0.85;
+    ctx.globalAlpha = moonAmt * 0.55;
+    ctx.fillStyle = 'rgba(16,22,44,0.92)';
+    ctx.beginPath();
+    ctx.arc(ox + off - r*0.72, oy - r*0.16, r*1.08, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawHills(){
+  for (let k = 0; k < hills.length; k++){
+    const pts = hills[k];
+    const base = mix(ringLerp(GROUND_KEYS, season), [40,62,86], 0.45 - k*0.16);
+    const snow = mix(base, [226,236,248], snowF*0.8);
+    ctx.fillStyle = css(shade(snow));
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    ctx.lineTo(0, pts[0].y);
+    for (const p of pts) ctx.lineTo(p.x, p.y);
+    ctx.lineTo(W, H);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
+function drawGround(){
+  const base = ringLerp(GROUND_KEYS, season);
+  const near = shade(mix(base, [30,44,26], 0.22));
+  const far  = shade(base);
+  const g = ctx.createLinearGradient(0, groundY, 0, H);
+  g.addColorStop(0, css(far));
+  g.addColorStop(1, css(near));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, groundY - 1, W, H - groundY + 1);
+
+}
+
+// Snowfield plus the drift heaped around the trunk, built as ONE path and filled
+// once, so the two never show a seam or a doubled-up alpha edge. Drawn after the
+// tree so the foot of the trunk is properly buried.
+function drawSnowField(){
+  if (snowF <= 0.01) return;
+  const depth = 4 + snowF * (H - groundY) * 0.055;
+  snowTop = groundY + 2 - depth;
+  const dw = tree.crownH * 0.17 * snowF;
+
+  ctx.save();
+  ctx.globalAlpha = clamp(snowF, 0, 1);
+  const sg = ctx.createLinearGradient(0, snowTop, 0, H);
+  sg.addColorStop(0, css(shadeSnow([240,246,255])));
+  sg.addColorStop(1, css(shadeSnow([198,212,236])));
+  ctx.fillStyle = sg;
+
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, snowTop);
+  for (let x = 0; x <= W; x += 18){
+    ctx.lineTo(x, snowTop
+      - Math.sin(x*0.017 + 1.1)*4.0*snowF
+      - Math.sin(x*0.0061)*3.0*snowF);
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.moveTo(tree.baseX - dw, snowTop + dw*0.10);
+  ctx.ellipse(tree.baseX, snowTop + dw*0.10, dw, dw*0.42, 0, Math.PI, TAU);
+  ctx.lineTo(tree.baseX + dw, H);
+  ctx.lineTo(tree.baseX - dw, H);
+  ctx.closePath();
+  ctx.fill('nonzero');
+  ctx.restore();
+}
+
+function drawGrass(){
+  const base = ringLerp(GROUND_KEYS, season);
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const b of grass){
+    const c = shade(mix(mix(base, [30,52,24], 0.30), [180,196,150], b.tone*0.30));
+    ctx.strokeStyle = css(c, clamp(1 - snowF*1.7, 0, 1) * 0.85);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y);
+    ctx.quadraticCurveTo(b.x + b.lean*b.h*0.5, b.y - b.h*0.6, b.x + b.lean*b.h, b.y - b.h);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawLitter(){
+  ctx.save();
+  for (const l of litter){
+    if (l.a <= 0.02) continue;
+    ctx.save();
+    ctx.globalAlpha = l.a * clamp(1 - snowF*1.15, 0, 1);
+    ctx.translate(l.x, l.y);
+    ctx.rotate(l.ang);
+    ctx.fillStyle = css(shade(l.col));
+    leafPath(ctx, l.size);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// a branch as a tapered quad, so limbs thin out toward the twigs
+function branchPath(g, b, widen, lift){
+  const dx = b.x2 - b.x1, dy = b.y2 - b.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy/len, ny = dx/len;
+  const h1 = (b.w1*widen)/2, h2 = (b.w2*widen)/2;
+  const y1 = b.y1 - lift, y2 = b.y2 - lift;
+  const a = Math.atan2(ny, nx);            // the two cap arcs must sweep away
+  const b2 = Math.atan2(-ny, -nx);         // from the shaft, not back across it
+  g.beginPath();
+  g.moveTo(b.x1 + nx*h1, y1 + ny*h1);
+  g.lineTo(b.x2 + nx*h2, y2 + ny*h2);
+  g.arc(b.x2, y2, h2, a, b2, true);
+  g.lineTo(b.x1 - nx*h1, y1 - ny*h1);
+  g.arc(b.x1, y1, h1, b2, a, true);
+  g.closePath();
+}
+
+// Lay down every snow ridge and fork clump, offset vertically by `dy`. Ridges
+// go in one path and clumps in another: within each group the winding is
+// consistent, so a single fill unions them with no internal seams.
+function tracePiles(k, dy){
+  ctx.beginPath();
+  for (const pile of tree.snowPiles){
+    if (snowF < pile.melt) continue;
+    const p = pile.pts, n = p.length;
+    const ty = i => p[i].y - p[i].hw*0.85 - p[i].h*k + dy;
+    ctx.moveTo(p[0].x, p[0].y - p[0].hw*0.30 + dy);
+    ctx.lineTo(p[0].x, ty(0));
+    for (let i = 0; i < n-1; i++){                       // smooth, rolling crest
+      ctx.quadraticCurveTo(p[i].x, ty(i),
+                           (p[i].x + p[i+1].x)/2, (ty(i) + ty(i+1))/2);
+    }
+    ctx.lineTo(p[n-1].x, ty(n-1));
+    for (let i = n-1; i >= 0; i--){                      // bottom edge, resting
+      ctx.lineTo(p[i].x, p[i].y - p[i].hw*0.30 + dy);    // on the branch
+    }
+    ctx.closePath();
+  }
+  ctx.fill();
+
+  ctx.beginPath();
+  for (const c of tree.snowClumps){
+    if (snowF < c.melt) continue;
+    const r = c.r * k;
+    ctx.moveTo(c.x + r*1.15, c.y + dy);
+    ctx.ellipse(c.x, c.y + dy, r*1.15, r*0.48, 0, 0, TAU);
+  }
+  ctx.fill();
+}
+
+function drawTree(ox, oy){
+  const bark = shade([80,56,41]);
+  ctx.save();
+
+  // contact shadow, cast away from wherever the light is
+  const lean = clamp((cx - ox) / Math.max(1, R), -1, 1);
+  ctx.globalAlpha = 0.22 * sunUp * (1 - snowF*0.7);
+  ctx.fillStyle = 'rgba(24,36,20,1)';
+  ctx.beginPath();
+  ctx.ellipse(tree.baseX + lean*tree.baseW*1.6, groundY + tree.baseW*0.25,
+              tree.baseW*(1.7 + Math.abs(lean)*1.6), tree.baseW*0.42, 0, 0, TAU);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  for (const b of tree.branches){
+    ctx.fillStyle = css(mix(bark, [0,0,0], b.depth*0.045));
+    branchPath(ctx, b, 1, 0);
+    ctx.fill();
+  }
+
+  // rim light from whichever side the sun or moon is on
+  const rim = mix([255,214,140], [190,208,246], smoothstep(0.2, -0.2, Math.cos(angle)));
+  const side = Math.sign(ox - cx) || 1;
+  ctx.globalAlpha = 0.32;
+  ctx.strokeStyle = css(rim);
+  ctx.lineCap = 'round';
+  for (const b of tree.branches){
+    if (b.w1 < 1.8) continue;
+    ctx.lineWidth = Math.max(0.6, b.w1*0.24);
+    ctx.beginPath();
+    ctx.moveTo(b.x1 + side*b.w1*0.34, b.y1);
+    ctx.lineTo(b.x2 + side*b.w2*0.34, b.y2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Snow heaped along the tops of the limbs. Drawn twice: a cooler copy nudged
+  // down first, so a shaded rim peeks out where the pile meets the wood, then
+  // the lit surface on top.
+  if (snowF > 0.02){
+    ctx.globalAlpha = 1;
+    const k = 0.42 + 0.58*snowF;                 // piles shrink as they melt
+    ctx.fillStyle = css(shadeSnow([186,201,227]));
+    tracePiles(k, Math.max(1.2, tree.crownH*0.005));
+    ctx.fillStyle = css(shadeSnow([247,251,255]));
+    tracePiles(k, 0);
+  }
+  ctx.restore();
+}
+
+function drawLeaves(t, s){
+  ctx.save();
+  for (const lf of tree.leaves){
+    if (!lf.on || lf.grow <= 0.01) continue;
+    const sway = Math.sin(t*1.5 + lf.x*0.05 + lf.y*0.03) * 0.14;
+    ctx.save();
+    ctx.translate(lf.x, lf.y);
+    ctx.rotate(lf.ang + sway);
+    ctx.fillStyle = css(shade(leafColor(lf, s)));
+    leafPath(ctx, lf.size * lf.grow);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawFalling(dt, t){
+  const wind = Math.sin(t*0.35)*22 + 12;
+  for (let i = falling.length - 1; i >= 0; i--){
+    const f = falling[i];
+    f.vy = Math.min(f.vy + 150*dt, f.term);
+    f.y += f.vy * dt;
+    f.x += (wind*f.drag + Math.sin(t*2.1 + f.ph) * f.sway) * dt;
+    f.ang += f.va * dt;
+    f.scale = 1 + (f.y - f.y0) / Math.max(1, (f.land - f.y0)) * 0.35;
+
+    if (f.y >= f.land){
+      litter.push({ x:f.x, y:f.land, ang:f.ang, col:f.col, size:f.size*1.3, a:0.95 });
+      if (litter.length > 260) litter.splice(0, litter.length - 260);
+      falling.splice(i, 1);
+      continue;
+    }
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.ang);
+    ctx.scale(1, Math.max(0.25, Math.cos(f.ang*1.7)));   // flutter
+    ctx.fillStyle = css(shade(f.col));
+    leafPath(ctx, f.size * f.scale);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawSnowfall(dt, t){
+  if (snowF < 0.04) return;
+  ctx.save();
+  ctx.globalAlpha = clamp(snowF, 0, 1) * 0.85;
+  ctx.fillStyle = '#ffffff';
+  for (const f of flakes){
+    f.y += f.v * dt;
+    f.x += Math.sin(t*f.ss + f.sw) * 16 * dt;
+    if (f.y > H + 4){ f.y = -4; f.x = Math.random()*W; }
+    if (f.x < -4) f.x = W + 4; else if (f.x > W + 4) f.x = -4;
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawLightWash(ox, oy){
+  if (sunUp < 0.02) return;
+  const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, Math.max(W, H)*0.85);
+  const c = mix([255,226,160], [255,168,110], duskF);
+  g.addColorStop(0, css(c, 0.20 * sunUp * (1 - duskF*0.55)));   // don't wash out the sunset
+  g.addColorStop(1, css(c, 0));
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
+function drawVignette(){
+  const g = ctx.createRadialGradient(cx, H*0.5, Math.min(W,H)*0.32, cx, H*0.5, Math.max(W,H)*0.78);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, `rgba(0,0,0,${0.18 + nightF*0.22})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+/* --------------------------------------------------------- leaf shedding */
+function updateFoliage(dt, s){
+  const f = foliage(s);
+  let spawned = 0;
+  for (const lf of tree.leaves){
+    const attached = f > lf.thr;
+    if (lf.on && !attached){
+      lf.on = false;
+      if (spawned < 12){
+        spawned++;
+        falling.push({
+          x: lf.x, y: lf.y, y0: lf.y,
+          land: groundY + Math.random()*(H - groundY)*0.85,
+          vy: 6 + Math.random()*14, term: 46 + Math.random()*48,
+          sway: 26 + Math.random()*44, drag: 0.5 + Math.random()*0.8,
+          ph: Math.random()*TAU,
+          ang: lf.ang, va: (Math.random()-0.5)*3.4,
+          size: lf.size, scale: 1,
+          col: leafColor(lf, s)
+        });
+      }
+    } else if (!lf.on && attached){
+      lf.on = true; lf.grow = 0;
+    }
+    if (lf.on && lf.grow < 1) lf.grow = Math.min(1, lf.grow + dt*1.9);
+  }
+  if (falling.length > 300) falling.splice(0, falling.length - 300);
+
+  // spring clears the old litter away
+  const clearing = (s > 0.66 && s < 0.99) ? dt*0.55 : (snowF > 0.6 ? dt*0.25 : 0);
+  if (clearing){
+    for (let i = litter.length - 1; i >= 0; i--){
+      litter[i].a -= clearing;
+      if (litter[i].a <= 0) litter.splice(i, 1);
+    }
+  }
+}
+
+/* ------------------------------------------------------------- HUD text */
+let cycles = 0;
+let lastCycles = -1, lastLabel = '';
+function updateHUD(s){
+  cycles = Math.floor(angle / TAU);          // angle only grows, so this only grows
+  if (cycles !== lastCycles){
+    elCount.textContent = cycles;
+    if (lastCycles >= 0){
+      elCount.classList.remove('tick');
+      void elCount.offsetWidth;
+      elCount.classList.add('tick');
+    }
+    lastCycles = cycles;
+  }
+  elFill.style.width = (s*100).toFixed(1) + '%';
+  const seasonName = SEASONS[Math.floor(((s + 0.125) % 1) * 4) % 4];
+  const phaseName  = PHASES[Math.floor(((s + 0.0625) % 1) * 8) % 8];
+  const label = seasonName + '|' + phaseName;
+  if (label !== lastLabel){
+    elSeason.textContent = seasonName;
+    elPhase.textContent = '· ' + phaseName;
+    lastLabel = label;
+    canvas.setAttribute('aria-valuenow', Math.round(s*360));
+    canvas.setAttribute('aria-valuetext', `${seasonName}, ${phaseName}, cycle ${cycles}`);
+  }
+}
+
+/* ----------------------------------------------------------- main loop */
+let prev = performance.now();
+function frame(now){
+  let dt = (now - prev) / 1000;
+  prev = now;
+  dt = Math.min(dt, 0.05);
+  const t = now / 1000;
+  if (!Number.isFinite(angle)) angle = 0;
+  if (!Number.isFinite(vel))   vel = 0;
+
+  // flick momentum, then a slow drift of its own accord
+  if (dragging){
+    idle = 0;
+  } else if (vel > 0.02){
+    angle += vel * dt;
+    vel *= Math.pow(0.12, dt);
+    idle = 0;
+  } else {
+    vel = 0;
+    idle += dt;
+    angle += AUTO_SPEED * smoothstep(0, 1.4, idle) * dt;   // eases back in
+  }
+
+  const th = ((angle % TAU) + TAU) % TAU;
+  const s  = th / TAU;
+  season = s;
+
+  const cosT = Math.cos(th);
+  sunUp  = smoothstep(-0.30, 0.34, cosT);
+  nightF = 1 - sunUp;
+  duskF  = 1 - smoothstep(0, 0.55, Math.abs(cosT));
+  snowF  = clamp(1 - smoothstep(0, 0.21, Math.abs(s - 0.52)), 0, 1);
+
+  const orb = orbXY(th);
+
+  updateFoliage(dt, s);
+
+  drawSky(s);
+  drawStars(t);
+  drawMeteors(dt, t);
+  drawClouds(dt, s);
+  drawTrack(th);
+  drawOrb(t, th, orb.x, orb.y);
+  drawLightWash(orb.x, orb.y);
+  drawHills();
+  drawGround();
+  drawLitter();
+  drawGrass();
+  drawTree(orb.x, orb.y);
+  drawSnowField();
+  drawLeaves(t, s);
+  drawFalling(dt, t);
+  drawSnowfall(dt, t);
+  drawVignette();
+
+  updateHUD(s);
+  requestAnimationFrame(frame);
+}
+
+layout();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
