@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ember Line — Meteor Defense</title>
+  <meta name="description" content="Steer an interceptor and shoot down a meteor storm before it breaches the line.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <div id="score-panel" class="hud-panel">
+        <div class="hud-label">Score</div>
+        <div class="hud-value" id="score-val">0</div>
+      </div>
+      <div id="wave-panel" class="hud-panel">
+        <div class="hud-label">Wave</div>
+        <div class="hud-value" id="wave-val">1</div>
+      </div>
+      <div id="lives-panel" class="hud-panel">
+        <div class="hud-label">Line Integrity</div>
+        <div id="lives-icons"></div>
+      </div>
+    </div>
+
+    <div id="progress-wrap">
+      <div id="progress-track"><div id="progress-fill"></div></div>
+      <div id="progress-caption">Hold the line — <span id="progress-caption-num">0 / 25</span> destroyed</div>
+    </div>
+
+    <div id="touch-hint">Drag to steer · Tap to fire</div>
+
+    <div id="overlay">
+      <div class="card" id="start-card">
+        <p class="eyebrow">Meteor Defense</p>
+        <h1 class="title">Ember Line</h1>
+        <p class="desc">Meteors are falling toward the line. Steer your interceptor and shoot them down before impact.<br>The fall gets faster the longer you hold — but the line breaks easily in your favor: destroy <b>25 meteors</b> and you win.</p>
+        <button class="btn" id="start-btn">Launch</button>
+        <p class="hint"><span class="key">←/→</span> or <span class="key">A/D</span> move · <span class="key">SPACE</span> fire · <span class="key">ENTER</span> start</p>
+      </div>
+
+      <div class="card" id="win-card" style="display:none;">
+        <p class="eyebrow">Line Held</p>
+        <h1 class="title">Sky Cleared</h1>
+        <p class="desc">The bombardment has ended. Your line held against everything the sky threw at it.</p>
+        <div class="stat-row">
+          <div class="stat"><div class="n" id="win-score">0</div><div class="l">Score</div></div>
+          <div class="stat"><div class="n" id="win-time">0s</div><div class="l">Time</div></div>
+          <div class="stat"><div class="n" id="win-lives">0</div><div class="l">Lives Left</div></div>
+        </div>
+        <button class="btn" id="win-btn">Fly Again</button>
+      </div>
+
+      <div class="card" id="lose-card" style="display:none;">
+        <p class="eyebrow">Line Breached</p>
+        <h1 class="title">Impact</h1>
+        <p class="desc">Too many meteors got through. The line has fallen — but the sky is always worth a second run.</p>
+        <div class="stat-row">
+          <div class="stat"><div class="n" id="lose-score">0</div><div class="l">Score</div></div>
+          <div class="stat"><div class="n" id="lose-wave">1</div><div class="l">Wave Reached</div></div>
+        </div>
+        <button class="btn" id="lose-btn">Try Again</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js" defer></script>
+</body>
+</html>
