@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TRACE — Visual Rule Tests</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="page-head">
+  <p class="eyebrow">Visual Rule Tests / Module: Self as System</p>
+  <h1>TRACE</h1>
+</header>
+
+<div class="live-bar">
+  <span class="live-label">live conditions</span>
+  <input type="range" id="live-temp" min="40" max="120" value="89" step="1" aria-label="Temperature, drag to change the color swatch">
+  <span class="live-readout"><span id="live-temp-out">--</span>&deg;F</span>
+  <span class="live-swatch" id="live-swatch" aria-hidden="true"></span>
+</div>
+
+<main>
+
+  <section class="test" id="test-1">
+    <p class="test-num">Test 01</p>
+    <h2>Sigil seed</h2>
+    <canvas id="canvas-1" width="520" height="360"></canvas>
+    <p class="caption">
+      Tests Law 1: the sigil's geometry is generated once from one rule, a jittered
+      icosahedron, and never edited after that. Click the canvas to run the rule again
+      and produce a new instance. The first pass used a wide jitter range and the
+      results read as random blobs rather than one family; narrowing it to roughly
+      &plusmn;15% of the base radius kept every instance legibly the same sigil.
+    </p>
+  </section>
+
+  <section class="test" id="test-2">
+    <p class="test-num">Test 02</p>
+    <h2>Behavior rule</h2>
+    <canvas id="canvas-2" width="520" height="360"></canvas>
+    <p class="caption">
+      Tests Law 4: a streamline approaching the fixed circle is pushed outward under
+      one proximity rule, structured like Cubic Disarray, one rule applied with
+      increasing force row by row. Here the rule is deflection instead of rotation. No
+      input drives this test on purpose, it's checking whether the rule alone reads
+      clearly. The top row's deflection was nearly invisible on the first run, which
+      looked like a bug rather than a gradient, so a minimum deflection floor was added
+      until even the faintest row still visibly bends.
+    </p>
+  </section>
+
+  <section class="test" id="test-3">
+    <p class="test-num">Test 03</p>
+    <h2>Gesture language</h2>
+    <canvas id="canvas-3" width="520" height="360"></canvas>
+    <p class="caption">
+      Tests the gesture from Q06: horizontal drag maps to exactly one parameter,
+      camera yaw, and nothing else. The object holds still until touched, unlike Test
+      1's ambient rotation, so every bit of motion on screen is caused by you. The
+      first pass also mapped vertical drag to pitch, but that made the
+      one-parameter claim untrue, so pitch was cut and the gesture was reduced to the
+      single axis the proposal actually commits to.
+    </p>
+  </section>
+
+  <section class="test" id="test-4">
+    <p class="test-num">Test 04</p>
+    <h2>Atmosphere constraint</h2>
+    <canvas id="canvas-4" width="520" height="360"></canvas>
+    <label class="fog-toggle">
+      <input type="checkbox" id="fog-toggle" checked>
+      <span>depth fog</span>
+    </label>
+    <p class="caption">
+      Tests one atmospheric constraint: depth fog. Each element's color blends
+      toward the background as a function of its real distance from the camera, not
+      a painted-on vignette. No user input drives it, distance is the only variable;
+      the checkbox merely toggles it on and off for comparison and isn't part of the
+      system itself. Without fog every particle read at equal weight regardless of
+      depth, which flattened the orbit from Test 3, so the depth-based fade was
+      added to restore a sense of distance without introducing any new color or
+      shape.
+    </p>
+  </section>
+
+</main>
+
+<footer class="page-foot">
+  <p>TRACE / System Identity Proposal, Self as System</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
